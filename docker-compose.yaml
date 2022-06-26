@@ -1,0 +1,132 @@
+# Debug containers template
+x-router-debug: &router-debug
+  restart: always
+  image: router-debug
+  build:
+    context: .
+    target: router-debug
+  # This capability will allow us to use iproute2
+  cap_add:
+    - NET_ADMIN
+  # Using different profile allow to
+  # not start unrequired debug container
+  profiles:
+    - debug
+
+# Routers container template
+x-router: &router
+  restart: always
+  image: router
+  build:
+    context: .
+    target: router
+  cap_add:
+    - NET_ADMIN
+  command: --start
+  # Required to enable routing
+  # It is not possible to change these values at runtime
+  sysctls:
+    - net.ipv6.conf.all.disable_ipv6=0
+    - net.ipv6.conf.all.forwarding=1
+    - net.ipv4.ip_forward=1
+
+services:
+  # Routers containers
+  R1:
+    <<: *router
+    container_name: R1
+    hostname: R1
+    dns:
+      # Change dns for this container
+      - 192.0.2.1
+      - 2001:db8::1
+    volumes:
+      # Our entrypoint will display this file
+      - ./Dockerfile:/Dockerfile:ro
+    environment:
+      # Indicate to the entrypoint which file to display
+      - VOL_FILE=/Dockerfile
+      - ROUTE6_NET=fd83:b442:5c7e::/80
+      - ROUTE6_GW=fd32:f7ff:393f::8000:0:2
+      - ROUTE4_NET=10.0.200.0/24
+      - ROUTE4_GW=10.0.100.130
+    networks:
+      # IP Address is assigned automatically from the pool
+      S1:
+  R2:
+    <<: *router
+    container_name: R2
+    hostname: R2
+    networks:
+      # This container use manually assigned IP Addresses
+      S1:
+          ipv4_address: 10.0.100.130
+          ipv6_address: fd32:f7ff:393f::8000:0:2
+      S2:
+          ipv4_address: 10.0.200.130
+          ipv6_address: fd83:b442:5c7e::8000:0:2
+  R3:
+    <<: *router
+    container_name: R3
+    hostname: R3
+    environment:
+      - ROUTE6_NET=fd32:f7ff:393f::/80
+      - ROUTE6_GW=fd83:b442:5c7e::8000:0:2
+      - ROUTE4_NET=10.0.100.0/24
+      - ROUTE4_GW=10.0.200.130
+    networks:
+      S2:
+
+  # Debug containers
+  R1-debug:
+   <<: *router-debug
+   container_name: R1-debug
+   network_mode: service:R1
+  R2-debug:
+   <<: *router-debug
+   container_name: R2-debug
+   network_mode: service:R2
+  R3-debug:
+   <<: *router-debug
+   container_name: R3-debug
+   network_mode: service:R3
+
+networks:
+  S1:
+    name: s1
+    enable_ipv6: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-s1
+      com.docker.network.container_iface_prefix: s1-
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.100.0/24
+          # ip_range is used for automatic ip allocation,
+          # I reserve half of the subnet for this.
+          # The other half is for manual allocation,
+          # I will use it for R2 and for the host (gateway)
+          # to be sure their IP addresses are available, even
+          # if R1 and R3 are started first
+          ip_range: 10.0.200.0/25
+          gateway: 10.0.100.129
+        - subnet: fd32:f7ff:393f::/80
+          ip_range: fd32:f7ff:393f::/81
+          gateway: fd32:f7ff:393f::8000:0:1
+  S2:
+    name: s2
+    enable_ipv6: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-s2
+      com.docker.network.container_iface_prefix: s2-
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.200.0/24
+          ip_range: 10.0.200.0/25
+          gateway: 10.0.200.129
+        - subnet: fd83:b442:5c7e::/80
+          ip_range: fd83:b442:5c7e::/81
+          gateway: fd83:b442:5c7e::8000:0:1
